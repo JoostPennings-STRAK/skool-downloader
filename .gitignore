@@ -6,3 +6,7 @@ node_modules/*
 bin/yt-dlp*
 bin/ffmpeg*
 bin/ffprobe*
+
+# throwaway inspection (claude-code stap 1)
+_inspect/
+inspect-post.ts

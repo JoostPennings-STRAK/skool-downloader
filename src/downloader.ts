@@ -10,6 +10,21 @@ const YTDlpWrap = (YTDlpWrapPkg as any).default || YTDlpWrapPkg;
 
 const BIN_DIR = path.join(process.cwd(), 'bin');
 const YTDLP_PATH = path.join(BIN_DIR, process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp');
+
+/**
+ * Picks the correct standalone yt-dlp release asset for this OS/arch. The
+ * standalone builds bundle their own Python; the plain `yt-dlp` zipapp that
+ * yt-dlp-wrap downloads by default needs a system Python 3.10+, which many
+ * machines (e.g. stock macOS) don't have.
+ */
+function ytDlpAssetName(): string {
+    if (process.platform === 'win32') return 'yt-dlp.exe';
+    if (process.platform === 'darwin') return 'yt-dlp_macos';
+    // linux
+    if (process.arch === 'arm64') return 'yt-dlp_linux_aarch64';
+    if (process.arch === 'arm') return 'yt-dlp_linux_armv7l';
+    return 'yt-dlp_linux';
+}
 export class Downloader {
     private ytDlp: any = null;
     private initPromise: Promise<void> | null = null;
@@ -28,8 +43,21 @@ export class Downloader {
             }
 
             if (!fs.existsSync(YTDLP_PATH)) {
-                this.logger.info('Downloading yt-dlp binary locally...');
-                await YTDlpWrap.downloadFromGithub(YTDLP_PATH);
+                const asset = ytDlpAssetName();
+                this.logger.info(`Downloading yt-dlp binary locally (${asset})...`);
+                const assetUrl = `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${asset}`;
+                // axios follows redirects (GitHub → CDN) automatically in Node.
+                const response = await axios({
+                    url: assetUrl,
+                    method: 'GET',
+                    responseType: 'stream'
+                });
+                await new Promise<void>((resolve, reject) => {
+                    const writer = fs.createWriteStream(YTDLP_PATH);
+                    (response.data as Readable).pipe(writer);
+                    writer.on('finish', () => resolve());
+                    writer.on('error', reject);
+                });
                 if (process.platform !== 'win32') {
                     await fs.chmod(YTDLP_PATH, 0o755);
                 }

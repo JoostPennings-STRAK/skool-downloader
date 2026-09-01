@@ -80,6 +80,29 @@ To download only a **single lesson**:
 npm run skool "https://www.skool.com/your-community/classroom/course-id?md=lesson-id"
 ```
 
+### Downloading videos from a post / thread
+
+Community posts (the discussion feed, not the classroom) often contain videos —
+in the post itself and in the comments. Point the tool at a post URL:
+
+```bash
+npm run skool "https://www.skool.com/your-community/my-post-slug"
+```
+
+It finds every video in the thread (native Skool videos plus Loom / Vimeo /
+YouTube / Wistia embeds in comments) and, when there's more than one, lets you
+pick which to download. Non-interactive options:
+
+```bash
+npm run skool post "<post-url>" --all          # download all of them
+npm run skool post "<post-url>" --video 2,4    # download only #2 and #4
+```
+
+If the URL points straight at a comment (`...?p=abc123`), that comment's video
+is pre-selected. Output goes to `downloads/<Community>/Posts/<Post Title>/`
+(the post video as `post-video.mp4`, comment videos under `comments/`), separate
+from the course structure.
+
 ## 📁 Output Structure
 
 The tool creates a `downloads/` folder with the following structure:

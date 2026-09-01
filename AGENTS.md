@@ -35,6 +35,7 @@ The goal of this project is to provide a robust, platform-independent tool for c
 - `src/downloader.ts`: Wrapper for `yt-dlp` and logic for image localization and resource downloads.
 - `src/cli.ts`: Interactive CLI entry point (login, download course, download single lesson, regenerate index). Uses Listr2 to run lesson downloads concurrently with per-lesson status output.
 - `src/index.ts`: Core download orchestrator. Handles course parsing, output path resolution, lesson processing, and manifest/index generation. Exposes callbacks + task runner hooks for the CLI.
+- `src/post.ts`: Orchestrator for community **post/thread** downloads (`skool <post-url>` / `skool post <url>`). Uses `Scraper.extractPostData` to enumerate every video in a thread (post + nested comments; native Skool/Mux, or Loom/Vimeo/YouTube/Wistia embeds), resolves each to a concrete URL (HLS reconstruction, Loom `transcoded-url` API, or hand off to yt-dlp), and writes to `downloads/<Group>/Posts/<Post Title>/`. Comments are captured from the page's own `api2.skool.com/posts/{id}/comments` responses, not `__NEXT_DATA__`.
 - **Single Lesson Extraction**: The tool detects `?md=` or `?lesson=` in the input URL to download only a specific lesson instead of the entire course, and reports the exact destination path.
 - **Native Video Handling**: Automates interaction with the Mux player to capture signed tokens.
 - **Resource Downloads**: Uses direct API calls to fetch signed download URLs for attachments, stored in `resources/` folder within each lesson.

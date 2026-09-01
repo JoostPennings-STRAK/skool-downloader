@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs-extra';
 import { Listr, PRESET_TIMER } from 'listr2';
 import { downloadCourse, type DownloadMode } from './index.js';
+import { downloadPost, type VideoSelector } from './post.js';
 import { login, getAuthStatus } from './auth.js';
 import { regenerateIndex } from './regenerate-index.js';
 import { regenerateGroupIndex } from './regenerate-group-index.js';
@@ -18,10 +19,13 @@ type CliArgs = {
     mode?: DownloadMode;
     lessonId?: string | null;
     regenerateDir?: string;
+    post?: boolean;
+    selectAll?: boolean;
+    videoPicks?: number[];
 };
 
 function showHelp() {
-    console.log(`\nSkool Downloader\n\nUsage:\n  skool                          Interactive mode\n  skool login                    Log in to Skool\n  skool <classroom-url>          Download a course\n  skool <group-classroom-url>    Download all courses in a community\n  skool <lesson-url>             Download a single lesson (URL with ?md=)\n  skool regenerate-index         Regenerate all course indexes\n\nOptions:\n  -o, --output <dir>             Output directory (course root)\n  -c, --concurrency <number>     Lesson concurrency (default: 8)\n  --course                       Force course mode (ignore ?md=)\n  --lesson                       Force lesson mode\n  --lesson-id <id>               Explicit lesson id\n  -h, --help                     Show help\n`);
+    console.log(`\nSkool Downloader\n\nUsage:\n  skool                          Interactive mode\n  skool login                    Log in to Skool\n  skool <classroom-url>          Download a course\n  skool <group-classroom-url>    Download all courses in a community\n  skool <lesson-url>             Download a single lesson (URL with ?md=)\n  skool <post-url>               Download videos from a community post/thread\n  skool post <post-url>          Same, forced (if auto-detection is unsure)\n  skool regenerate-index         Regenerate all course indexes\n\nOptions:\n  -o, --output <dir>             Output directory\n  -c, --concurrency <number>     Lesson concurrency (default: 8)\n  --course                       Force course mode (ignore ?md=)\n  --lesson                       Force lesson mode\n  --lesson-id <id>               Explicit lesson id\n  --all                          Post mode: download every video without prompting\n  --video <1,3,4>                Post mode: download only these video numbers\n  -h, --help                     Show help\n`);
 }
 
 function parseArgs(args: string[]): CliArgs {
@@ -32,6 +36,23 @@ function parseArgs(args: string[]): CliArgs {
 
         if (arg === 'login') {
             parsed.command = 'login';
+            continue;
+        }
+        if (arg === 'post') {
+            parsed.command = 'download';
+            parsed.post = true;
+            continue;
+        }
+        if (arg === '--all') {
+            parsed.selectAll = true;
+            continue;
+        }
+        if (arg === '--video') {
+            parsed.videoPicks = (args[i + 1] || '')
+                .split(',')
+                .map((n) => Number.parseInt(n.trim(), 10))
+                .filter((n) => Number.isFinite(n));
+            i++;
             continue;
         }
         if (arg === 'regenerate-index') {
@@ -117,6 +138,85 @@ function isClassroomRootUrl(value: string) {
     } catch {
         return false;
     }
+}
+
+const RESERVED_GROUP_TABS = new Set([
+    '', 'classroom', 'about', 'calendar', 'members', 'leaderboards', 'map', 'settings'
+]);
+
+function isPostUrl(value: string) {
+    try {
+        const url = new URL(value);
+        if (!/(^|\.)skool\.com$/.test(url.hostname)) return false;
+        const parts = url.pathname.split('/').filter(Boolean);
+        return parts.length === 2 && !RESERVED_GROUP_TABS.has(parts[1]);
+    } catch {
+        return false;
+    }
+}
+
+function formatDuration(ms?: number) {
+    if (!ms || ms <= 0) return '';
+    const total = Math.round(ms / 1000);
+    return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+}
+
+/**
+ * Builds the "which videos from this thread?" chooser. Non-interactive callers
+ * get "all" (or `--video` picks, or just the permalinked comment); interactive
+ * callers get a multiselect prompt.
+ */
+function buildVideoSelector(
+    interactive: boolean,
+    opts: { all?: boolean; picks?: number[] }
+): VideoSelector {
+    return async (videos, ctx) => {
+        if (opts.picks && opts.picks.length > 0) {
+            const wanted = new Set(opts.picks);
+            return videos.filter((v) => wanted.has(v.index));
+        }
+
+        const permalinked = ctx.preselectShortId
+            ? videos.filter((v) => v.commentShortId === ctx.preselectShortId)
+            : [];
+
+        if (opts.all || videos.length === 1) return videos;
+
+        if (!interactive) {
+            return permalinked.length > 0 ? permalinked : videos;
+        }
+
+        const choice = await multiselect({
+            message: `${videos.length} videos in "${ctx.postTitle}" — pick which to download`,
+            options: videos.map((v) => ({
+                value: v.index,
+                label: `${v.source === 'post' ? '📌 Post' : `💬 ${v.author}`}: ${v.title}`,
+                hint: [v.provider, formatDuration(v.durationMs)].filter(Boolean).join(' · ') || undefined
+            })),
+            initialValues:
+                permalinked.length > 0 ? permalinked.map((v) => v.index) : videos.map((v) => v.index),
+            required: true
+        });
+        handleCancel(choice);
+        const picked = new Set(choice as number[]);
+        return videos.filter((v) => picked.has(v.index));
+    };
+}
+
+async function runPostDownload(
+    url: string,
+    outputDir: string | undefined,
+    selector: VideoSelector,
+    interactiveOutro: ((message: string) => void) | null
+) {
+    const summary = await downloadPost({ url, outputDir, selectVideos: selector });
+    const message =
+        summary.downloaded > 0
+            ? `${summary.downloaded} video(s) saved to ${summary.outputDir}` +
+              (summary.failed > 0 ? ` (${summary.failed} could not be downloaded)` : '')
+            : 'No videos were downloaded.';
+    if (interactiveOutro) interactiveOutro(message);
+    else console.log(`\n${message}`);
 }
 
 async function ensureLogin(): Promise<boolean> {
@@ -226,13 +326,14 @@ async function runInteractive() {
             { value: 'download-course', label: 'Download a full course' },
             { value: 'download-multi', label: 'Download multiple courses' },
             { value: 'download-lesson', label: 'Download a single lesson' },
+            { value: 'download-post', label: 'Download videos from a post/thread' },
             { value: 'login', label: 'Log in to Skool' },
             { value: 'regenerate-index', label: 'Regenerate all course indexes' },
             { value: 'exit', label: 'Exit' }
         ]
     });
     handleCancel(action);
-    const actionValue = action as 'download-course' | 'download-multi' | 'download-lesson' | 'login' | 'regenerate-index' | 'exit';
+    const actionValue = action as 'download-course' | 'download-multi' | 'download-lesson' | 'download-post' | 'login' | 'regenerate-index' | 'exit';
 
     if (actionValue === 'exit') {
         outro('See you next time.');
@@ -257,6 +358,33 @@ async function runInteractive() {
     const loggedIn = await ensureLogin();
     if (!loggedIn) {
         outro('Login required. Exiting.');
+        return;
+    }
+
+    if (actionValue === 'download-post') {
+        const urlInput = await text({
+            message: 'Post / thread URL',
+            placeholder: 'https://www.skool.com/community/my-post-slug',
+            validate(value) {
+                if (!value || !value.startsWith('http')) return 'Please enter a valid URL.';
+                return undefined;
+            }
+        });
+        handleCancel(urlInput);
+
+        const outputDir = await text({
+            message: 'Custom output directory (leave empty for default)',
+            placeholder: path.join(process.cwd(), 'downloads')
+        });
+        handleCancel(outputDir);
+        const outputDirValue = typeof outputDir === 'string' ? outputDir.trim() : '';
+
+        await runPostDownload(
+            String(urlInput).trim(),
+            outputDirValue.length > 0 ? outputDirValue : undefined,
+            buildVideoSelector(true, {}),
+            (message) => outro(message)
+        );
         return;
     }
 
@@ -509,6 +637,17 @@ async function runWithArgs(args: CliArgs) {
             console.log('Login required. Exiting.');
             return;
         }
+
+        if (args.post || isPostUrl(args.url)) {
+            await runPostDownload(
+                args.url,
+                args.outputDir && args.outputDir !== 'undefined' ? args.outputDir : undefined,
+                buildVideoSelector(false, { all: args.selectAll, picks: args.videoPicks }),
+                null
+            );
+            return;
+        }
+
         if (isClassroomRootUrl(args.url)) {
             const logger = buildInteractiveLogger();
             const library = await fetchCourseLibrary(args.url, logger);

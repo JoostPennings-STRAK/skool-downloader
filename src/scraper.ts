@@ -1,4 +1,4 @@
-import { chromium, type Browser, type BrowserContext } from 'playwright';
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import fs from 'fs-extra';
 import { createConsoleLogger, type Logger } from './logger.js';
 import { STORAGE_STATE_PATH } from './auth.js';
@@ -53,6 +53,94 @@ export interface CourseLibraryResult {
     groupName: string;
     classroomUrl: string;
     courses: CourseListItem[];
+}
+
+/**
+ * A single downloadable video found somewhere in a community post/thread:
+ * either the post itself or one of its (nested) comments.
+ */
+export interface ThreadVideo {
+    /** 1-based position in the thread, used for selection and file naming. */
+    index: number;
+    source: 'post' | 'comment';
+    /** Full comment id (source === 'comment' only). */
+    commentId?: string;
+    /** First 8 chars of the comment id — matches the `?p=` permalink param. */
+    commentShortId?: string;
+    /** Display name of whoever posted it, e.g. "Louis Dowdeswell". */
+    author: string;
+    /** Skool handle, e.g. "louis-dowdeswell-3034". */
+    authorHandle: string;
+    /** Best available label (video title, else a snippet of the text). */
+    title: string;
+    kind: 'native' | 'external';
+    /** 'skool' for native, otherwise 'loom' | 'vimeo' | 'youtube' | 'wistia' | 'external'. */
+    provider: string;
+    /** Native Skool/Mux video id (kind === 'native'). */
+    nativeVideoId?: string;
+    /** Present when the page already embedded a signed playback token. */
+    playbackId?: string;
+    playbackToken?: string;
+    /** Direct share/embed URL for external providers (kind === 'external'). */
+    externalUrl?: string;
+    durationMs?: number;
+    thumbnailUrl?: string;
+    /** Short snippet of the surrounding post/comment text, for context. */
+    contentSnippet?: string;
+}
+
+export interface PostResult {
+    groupName: string;
+    url: string;
+    postId: string;
+    groupId: string;
+    postSlug: string;
+    postTitle: string;
+    postContentHtml: string;
+    /** `?p=` value from the input URL, if any — used to pre-select a comment video. */
+    preselectShortId?: string;
+    videos: ThreadVideo[];
+}
+
+function providerFromUrl(url: string): string {
+    if (/loom\.com/i.test(url)) return 'loom';
+    if (/vimeo\.com/i.test(url)) return 'vimeo';
+    if (/youtube\.com|youtu\.be/i.test(url)) return 'youtube';
+    if (/wistia\.com|wi\.st/i.test(url)) return 'wistia';
+    return 'external';
+}
+
+function parseJsonArray(raw: unknown): any[] {
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw !== 'string' || raw.trim() === '') return [];
+    try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+    } catch {
+        return [];
+    }
+}
+
+/** Skool stores text with escaped punctuation and `[@Name](obj://user/id)` mentions. */
+function cleanSkoolText(raw: string): string {
+    return String(raw || '')
+        .replace(/\[@([^\]]+)\]\(obj:\/\/user\/[^)]+\)/g, '@$1')
+        .replace(/\\([()[\]*_~`>#+\-.!])/g, '$1');
+}
+
+function textSnippet(raw: string, max = 70): string {
+    const clean = cleanSkoolText(raw).replace(/\s+/g, ' ').trim();
+    if (clean.length <= max) return clean;
+    return `${clean.slice(0, max - 1).trimEnd()}…`;
+}
+
+function skoolTextToHtml(raw: string): string {
+    const escape = (s: string) =>
+        s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return cleanSkoolText(raw)
+        .split(/\n{2,}/)
+        .map((para) => `<p>${escape(para).replace(/\n/g, '<br/>')}</p>`)
+        .join('');
 }
 
 function resolveClassroomRootUrl(inputUrl: string) {
@@ -337,59 +425,8 @@ export class Scraper {
         // Native Skool Player Handling (Mux)
         if (!vLink && metadata.videoId) {
             this.logger.info(`    ℹ️ Native videoId found: ${metadata.videoId}.`);
-
-            try {
-                // Try to find and click the play button/thumbnail to trigger stream signed URL generation
-                const playButtonSelector = 'div[class*="MuxThumbnailWrapper"]';
-                const hasPlayButton = await page.evaluate((sel) => !!document.querySelector(sel), playButtonSelector);
-
-                if (hasPlayButton) {
-                    this.logger.info('    🖱️ Clicking play button to initialize stream...');
-                    await page.click(playButtonSelector);
-
-                    // Poll for the stream manifest to appear in network entries or player src
-                    let attempts = 0;
-                    while (attempts < 10) {
-                        vLink = await page.evaluate(() => {
-                            // 1. Check performance entries for m3u8
-                            const entries = performance.getEntriesByType('resource')
-                                .filter(e => e.name.includes('m3u8') && e.name.includes('token='));
-                            if (entries.length > 0) return (entries[entries.length - 1] as PerformanceResourceTiming).name;
-
-                            // 2. Search all shadow roots for a video element (BFS)
-                            const stack: any[] = [document];
-                            while (stack.length > 0) {
-                                const root = stack.pop();
-                                const video = root.querySelector('video');
-                                if (video && video.src && video.src.includes('m3u8')) return video.src;
-
-                                const elements = root.querySelectorAll('*');
-                                for (let i = 0; i < elements.length; i++) {
-                                    if (elements[i].shadowRoot) {
-                                        stack.push(elements[i].shadowRoot);
-                                    }
-                                }
-                            }
-                            return null;
-                        });
-
-                        if (vLink) break;
-                        await page.waitForTimeout(1000);
-                        attempts++;
-                    }
-                }
-
-                // Fallback: Reconstruct from pageProps if interaction failed but we have IDs
-                if (!vLink) {
-                    const videoData = pageProps.video || pageProps.course?.video;
-                    if (videoData && videoData.id === metadata.videoId && videoData.playbackId && videoData.playbackToken) {
-                        this.logger.info('    ℹ️ Using reconstructed HLS URL from page props fallback.');
-                        vLink = `https://stream.video.skool.com/${videoData.playbackId}.m3u8?token=${videoData.playbackToken}`;
-                    }
-                }
-            } catch (err) {
-                this.logger.warn(`    ⚠️ Interaction-based extraction failed: ${String(err)}`);
-            }
+            const fallbackVideos = [pageProps.video, pageProps.course?.video].filter(Boolean);
+            vLink = await this.captureNativeVideoLink(page, metadata.videoId, fallbackVideos);
         }
 
         // Resource extraction
@@ -529,7 +566,314 @@ export class Scraper {
         };
     }
 
-    // Helper removed as logic is now in extractLessonData for shared state
+    /**
+     * Resolves a signed HLS manifest URL for a native Skool (Mux) video on the
+     * currently loaded page. Prefers a playback token already present in the
+     * page state; falls back to clicking the player and sniffing the manifest.
+     * Shared by `extractLessonData` (classroom) and `extractPostData` (community).
+     */
+    private async captureNativeVideoLink(
+        page: Page,
+        videoId: string,
+        fallbackVideos: any[] = []
+    ): Promise<string> {
+        // 1. Direct reconstruction when a signed token is already in the page state.
+        const known = fallbackVideos.find((v) => v && v.id === videoId);
+        if (known?.playbackId && known?.playbackToken) {
+            this.logger.info('    ℹ️ Using HLS URL reconstructed from page state.');
+            return `https://stream.video.skool.com/${known.playbackId}.m3u8?token=${known.playbackToken}`;
+        }
+
+        // 2. Interaction fallback: click the player, then sniff the manifest.
+        try {
+            const playButtonSelector = 'div[class*="MuxThumbnailWrapper"]';
+            const hasPlayButton = await page.evaluate(
+                (sel) => !!document.querySelector(sel),
+                playButtonSelector
+            );
+            if (!hasPlayButton) return '';
+
+            this.logger.info('    🖱️ Clicking play button to initialize stream...');
+            await page.click(playButtonSelector);
+
+            let attempts = 0;
+            while (attempts < 10) {
+                const vLink = await page.evaluate(() => {
+                    // 1. Check performance entries for m3u8
+                    const entries = performance.getEntriesByType('resource')
+                        .filter(e => e.name.includes('m3u8') && e.name.includes('token='));
+                    if (entries.length > 0) return (entries[entries.length - 1] as PerformanceResourceTiming).name;
+
+                    // 2. Search all shadow roots for a video element (BFS)
+                    const stack: any[] = [document];
+                    while (stack.length > 0) {
+                        const root = stack.pop();
+                        const video = root.querySelector('video');
+                        if (video && video.src && video.src.includes('m3u8')) return video.src;
+
+                        const elements = root.querySelectorAll('*');
+                        for (let i = 0; i < elements.length; i++) {
+                            if (elements[i].shadowRoot) {
+                                stack.push(elements[i].shadowRoot);
+                            }
+                        }
+                    }
+                    return null;
+                });
+
+                if (vLink) return vLink;
+                await page.waitForTimeout(1000);
+                attempts++;
+            }
+        } catch (err) {
+            this.logger.warn(`    ⚠️ Interaction-based extraction failed: ${String(err)}`);
+        }
+        return '';
+    }
+
+    /**
+     * Loads a community post/thread and returns every downloadable video in it
+     * (the post itself plus every nested comment). Comments are not in
+     * `__NEXT_DATA__`; they come from an authenticated `api2.skool.com` call
+     * made from the page context so the saved session cookies apply.
+     */
+    async extractPostData(url: string): Promise<PostResult> {
+        if (!this.context) await this.init();
+        const page = await this.context!.newPage();
+
+        const urlObj = new URL(url);
+        const preselectShortId = urlObj.searchParams.get('p') || undefined;
+        const cleanUrl = `${urlObj.origin}${urlObj.pathname}`;
+
+        // The comments feed is loaded by the page itself via api2.skool.com — that
+        // request already carries the right auth/headers, so we capture its
+        // response(s) rather than trying to replay the call ourselves.
+        const commentResponses: any[] = [];
+        page.on('response', async (res) => {
+            if (!/api2\.skool\.com\/posts\/[^/]+\/comments/.test(res.url())) return;
+            try {
+                if ((res.headers()['content-type'] || '').includes('application/json')) {
+                    commentResponses.push(await res.json());
+                }
+            } catch {
+                /* ignore unreadable bodies */
+            }
+        });
+
+        this.logger.info(`Navigating to ${cleanUrl}...`);
+        await page.goto(cleanUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await page.waitForTimeout(3000);
+
+        // Nudge the page to load lazily-rendered / "load more" comments.
+        for (let i = 0; i < 5; i++) {
+            await page.mouse.wheel(0, 2400);
+            await page.waitForTimeout(1200);
+        }
+        await page.waitForTimeout(1500);
+
+        const nextData = await page.evaluate(() => {
+            const script = document.getElementById('__NEXT_DATA__');
+            return script ? JSON.parse(script.innerText) : null;
+        });
+
+        if (!nextData) throw new Error(`Could not find __NEXT_DATA__ for post at ${url}`);
+
+        const pageProps = nextData.props?.pageProps || {};
+        const postTree = pageProps.postTree;
+        if (!postTree?.post) {
+            throw new Error('Post structure not found in __NEXT_DATA__ — is this a community post URL?');
+        }
+
+        const post = postTree.post;
+        const postMeta = post.metadata || {};
+        const groupData = pageProps.currentGroup || {};
+        const groupName =
+            groupData.metadata?.displayName ||
+            groupData.metadata?.name ||
+            groupData.name ||
+            'Unknown Group';
+        const postId: string = post.id;
+        const groupId: string = post.groupId || groupData.id;
+        const postTitle: string = postMeta.title || post.name || 'Untitled Post';
+        const postAuthor =
+            `${post.user?.firstName ?? ''} ${post.user?.lastName ?? ''}`.trim() ||
+            post.user?.name ||
+            'Unknown';
+
+        const videos: ThreadVideo[] = [];
+        let counter = 1;
+
+        const pushExternal = (
+            meta: any,
+            base: Omit<ThreadVideo, 'index' | 'kind' | 'provider' | 'externalUrl' | 'title'>,
+            fallbackTitle: string
+        ) => {
+            const entries = parseJsonArray(meta.video_links_data ?? meta.videoLinksData);
+            if (entries.length > 0) {
+                for (const entry of entries) {
+                    if (!entry?.url) continue;
+                    videos.push({
+                        ...base,
+                        index: counter++,
+                        kind: 'external',
+                        provider: providerFromUrl(entry.url),
+                        externalUrl: entry.url,
+                        title: entry.title || fallbackTitle,
+                        durationMs: entry.len_ms ?? entry.lenMs,
+                        thumbnailUrl: entry.thumbnail
+                    });
+                }
+                return;
+            }
+            const raw = String(meta.video_links ?? meta.videoLinks ?? '').split(/\s+/).filter(Boolean);
+            for (const link of raw) {
+                videos.push({
+                    ...base,
+                    index: counter++,
+                    kind: 'external',
+                    provider: providerFromUrl(link),
+                    externalUrl: link,
+                    title: fallbackTitle
+                });
+            }
+        };
+
+        // --- 1. The post's own video(s) ---
+        const postVideoPool: any[] = Array.isArray(postTree.videos) ? postTree.videos : [];
+        const postVideoIds = String(postMeta.videoIds || '')
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean);
+        for (const vid of postVideoIds) {
+            const match = postVideoPool.find((v) => v && v.id === vid);
+            videos.push({
+                index: counter++,
+                source: 'post',
+                author: postAuthor,
+                authorHandle: post.user?.name || 'unknown',
+                title: postTitle,
+                kind: 'native',
+                provider: 'skool',
+                nativeVideoId: vid,
+                playbackId: match?.playbackId,
+                playbackToken: match?.playbackToken,
+                durationMs: match?.duration,
+                thumbnailUrl: postMeta.imagePreview,
+                contentSnippet: textSnippet(postMeta.content)
+            });
+        }
+        pushExternal(
+            postMeta,
+            {
+                source: 'post',
+                author: postAuthor,
+                authorHandle: post.user?.name || 'unknown',
+                contentSnippet: textSnippet(postMeta.content)
+            },
+            postTitle
+        );
+
+        // --- 2. Comments (nested), captured from the page's own API responses ---
+        const seenComments = new Set<string>();
+        const walkComments = (node: any) => {
+            const c = node?.post;
+            if (c && !seenComments.has(c.id)) {
+                seenComments.add(c.id);
+                const cMeta = c.metadata || {};
+                const author =
+                    `${c.user?.first_name ?? ''} ${c.user?.last_name ?? ''}`.trim() ||
+                    c.user?.name ||
+                    'Unknown';
+                const base = {
+                    source: 'comment' as const,
+                    commentId: c.id,
+                    commentShortId: String(c.id || '').slice(0, 8),
+                    author,
+                    authorHandle: c.user?.name || 'unknown',
+                    contentSnippet: textSnippet(cMeta.content)
+                };
+                const fallbackTitle = textSnippet(cMeta.content) || `Comment by ${author}`;
+
+                const cVideoIds = String(cMeta.video_ids || '')
+                    .split(',')
+                    .map((s: string) => s.trim())
+                    .filter(Boolean);
+                for (const vid of cVideoIds) {
+                    videos.push({
+                        ...base,
+                        index: counter++,
+                        title: fallbackTitle,
+                        kind: 'native',
+                        provider: 'skool',
+                        nativeVideoId: vid
+                    });
+                }
+                pushExternal(cMeta, base, fallbackTitle);
+            }
+            for (const child of node?.children || []) walkComments(child);
+        };
+
+        if (commentResponses.length === 0) {
+            this.logger.warn('    ⚠️ No comments feed was captured — only post-level videos found.');
+        }
+        for (const payload of commentResponses) {
+            if (payload?.post_tree) walkComments(payload.post_tree);
+            if (payload?.pinned_post_tree?.post) walkComments(payload.pinned_post_tree);
+        }
+
+        // Re-number so indexes are contiguous regardless of capture order.
+        videos.forEach((v, i) => { v.index = i + 1; });
+
+        await page.close();
+
+        return {
+            groupName,
+            url: cleanUrl,
+            postId,
+            groupId,
+            postSlug: post.name || postId,
+            postTitle,
+            postContentHtml: skoolTextToHtml(postMeta.content || ''),
+            preselectShortId,
+            videos
+        };
+    }
+
+    /**
+     * Opens a post page (optionally focused on a specific comment via `?p=`)
+     * and resolves a signed HLS URL for a native video whose playback token was
+     * not embedded in the initial page state (e.g. native videos in comments).
+     */
+    async captureNativePostVideoLink(
+        postUrl: string,
+        nativeVideoId: string,
+        commentShortId?: string
+    ): Promise<string> {
+        if (!this.context) await this.init();
+        const page = await this.context!.newPage();
+        try {
+            const urlObj = new URL(postUrl);
+            if (commentShortId) urlObj.searchParams.set('p', commentShortId);
+            await page.goto(urlObj.toString(), { waitUntil: 'domcontentloaded', timeout: 60000 });
+            await page.waitForTimeout(4000);
+
+            const embeddedVideos = await page.evaluate(() => {
+                const script = document.getElementById('__NEXT_DATA__');
+                if (!script) return [];
+                try {
+                    const data = JSON.parse(script.innerText);
+                    return data.props?.pageProps?.postTree?.videos || [];
+                } catch {
+                    return [];
+                }
+            });
+
+            return await this.captureNativeVideoLink(page, nativeVideoId, embeddedVideos);
+        } finally {
+            await page.close();
+        }
+    }
+
 
 
     private parseTipTap(nodes: any[]): string {
