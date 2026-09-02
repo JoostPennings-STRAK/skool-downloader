@@ -7,8 +7,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    name: Build image (amd64)
+  build-deploy:
+    name: Build image + deploy op MX
     runs-on: [self-hosted, linux, amd64]
     steps:
       - name: Checkout
@@ -16,36 +16,20 @@ jobs:
           git clone "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@git.strak.jp/${{ github.repository }}.git" .
           git checkout "${{ github.sha }}"
 
-      - name: Docker login
-        run: |
-          echo "${{ secrets.REGISTRY_TOKEN }}" | docker login git.strak.jp \
-            -u AdminJoost --password-stdin
-
-      - name: Build and push
-        run: |
-          IMAGE=git.strak.jp/homelab/skool-downloader
-          docker build -t "$IMAGE:latest" .
-          docker push "$IMAGE:latest"
-
-  deploy:
-    name: Deploy op MX
-    needs: build
-    runs-on: [self-hosted, linux, amd64]
-    steps:
-      - name: Docker login
-        run: |
-          echo "${{ secrets.REGISTRY_TOKEN }}" | docker login git.strak.jp \
-            -u AdminJoost --password-stdin
+      # De runner deelt de Docker-daemon van de host met de deploy-stap, dus het
+      # image blijft lokaal — geen registry-push (de Playwright-base is te groot
+      # voor de ingress) en geen registry-opslag op de Pi.
+      - name: Build image
+        run: docker build --provenance=false -t git.strak.jp/homelab/skool-downloader:latest .
 
       - name: Deploy
         run: |
           cd /opt/stacks/skool-downloader
-          docker compose pull
           docker compose up -d --force-recreate --remove-orphans
 
       - name: Health check
         run: |
-          for i in $(seq 1 24); do
+          for i in $(seq 1 30); do
             STATUS=$(docker inspect --format='{{.State.Health.Status}}' skool-downloader 2>/dev/null || echo missing)
             [ "$STATUS" = "healthy" ] && echo "✓ Healthy" && exit 0
             echo "Wachten... ($STATUS)"
