@@ -4,6 +4,14 @@ A robust, platform-independent CLI tool to create local, offline backups of your
 
 This tool downloads video content, localizes images, preserves course attachments, and generates a navigable, styled HTML structure that mirrors the online classroom.
 
+> ### 🍴 This is a fork
+> Forked from [`balmasi/skool-downloader`](https://github.com/balmasi/skool-downloader). On top of the original course/lesson backup it adds:
+> - **Downloading videos out of community posts and their comment threads** (Skool-native, Loom, Vimeo, YouTube, Wistia) — from the CLI or a small local **web UI**.
+> - A fix so the bundled `yt-dlp` runs without needing a system Python ≥ 3.10.
+>
+> Everything from upstream still works unchanged. Full list under [Fork changes](#-fork-changes).
+> Some behaviour (the "which video did I probably want" guess) is tuned for a weekly coaching-feedback workflow — see that section.
+
 ## ✨ Features
 
 - **🚀 Smart Binary Management:** Automatically downloads the correct `yt-dlp` and `ffmpeg` binaries for your OS (Windows, macOS, Linux) and architecture (Intel, Apple Silicon ARM, Linux ARM).
@@ -11,6 +19,8 @@ This tool downloads video content, localizes images, preserves course attachment
 - **📄 Asset Localization:** Downloads all lesson images locally and rewrites HTML paths for true offline 100% viewing.
 - **📎 Resource Preservation:** Automatically fetches course attachments (PDFs, DOCX, etc.) via Skool's API.
 - **🎯 Single Lesson Mode:** Download a whole course or just a single lesson using a specific URL.
+- **💬 Post & Thread Videos:** _(fork)_ Download videos from community posts and their nested comments — Skool-native or Loom/Vimeo/YouTube/Wistia embeds.
+- **🌳 Visual Thread Picker:** _(fork)_ A local browser UI (`npm run skool-web`) renders the whole comment tree so you can pick exactly the video you want and play it back inline.
 - **🛠 Interrupted Download Recovery:** Skips already downloaded files and includes a tool to regenerate the index page.
 
 ## 🛠 Prerequisites
@@ -18,14 +28,14 @@ This tool downloads video content, localizes images, preserves course attachment
 - [Node.js](https://nodejs.org/) (v18 or higher recommended)
 - [npm](https://www.npmjs.com/)
 
-**Note:** No system-wide installation of `yt-dlp` or `ffmpeg` is required. The tool manages these locally in the `bin/` folder.
+**Note:** `yt-dlp` is managed locally in the `bin/` folder — no system-wide install needed. `ffmpeg` must be available on your `PATH` (e.g. `brew install ffmpeg`); it's used to merge streams and for `+faststart`.
 
 ## 🚀 Getting Started
 
 ### 1. Installation
 
 ```bash
-git clone https://github.com/balmasi/skool-downloader.git
+git clone https://github.com/JoostPennings-STRAK/skool-downloader.git
 cd skool-downloader
 npm install
 ```
@@ -39,17 +49,16 @@ npm run login
 ```
 *A browser window will open. Log in to your Skool account. Once you see your dashboard, the script will save your session and close the browser.*
 
-### 3. Using NPX
+### Using NPX (upstream only)
 
-This package is published on npm, so you can run the CLI without installing anything locally:
+The original package is on npm and can be run without a local checkout:
 
 ```bash
 npx skool-downloader
 ```
 
-If you prefer to stay completely local (and allow offline development), run `npm install` once and use `npm run skool` as shown below.
-
-If you prefer to stay completely local (and allow offline development), run `npm install` once and use `npm run skool` as shown below.
+Note this fetches **upstream** `balmasi/skool-downloader`, not this fork — the
+post/thread and web-UI features below need a local clone (`npm run skool`).
 
 ### 3. Downloading a Course
 
@@ -126,15 +135,22 @@ The tool creates a `downloads/` folder with the following structure:
 ```text
 downloads/
 └── Community Name/
-    └── Course Name/
-        ├── index.html (Master navigation page)
-        └── 1-Module Name/
-            ├── 1-Lesson Title/
-            │   ├── index.html (The lesson page)
-            │   ├── video.mp4
-            │   ├── assets/ (Localized images)
-            │   └── resources/ (Attachments)
-            └── ...
+    ├── Course Name/
+    │   ├── index.html (Master navigation page)
+    │   └── 1-Module Name/
+    │       ├── 1-Lesson Title/
+    │       │   ├── index.html (The lesson page)
+    │       │   ├── video.mp4
+    │       │   ├── assets/ (Localized images)
+    │       │   └── resources/ (Attachments)
+    │       └── ...
+    └── Posts/                        (fork: post/thread downloads)
+        └── Post Title/
+            ├── index.html            (thread overview + players)
+            ├── .post.json            (every video found in the thread)
+            ├── post-video.mp4        (the post's own video, if downloaded)
+            └── comments/
+                └── 02-Author-Video Title.mp4
 ```
 
 ## 🔧 Advanced
@@ -145,6 +161,38 @@ If you manually move files or skip lessons, you can regenerate the master `index
 ```bash
 npm run regenerate-index
 ```
+
+## 🍴 Fork changes
+
+Everything below is additive — the classroom/course flow is untouched.
+
+### `v1.1.0` — Post & thread video downloads + web UI
+
+- **`npm run skool <post-url>`** (or `npm run skool post <url>`) downloads videos
+  from a community **post and its comment thread**, not just the classroom. It
+  walks every nested comment and finds:
+  - native Skool/Mux videos (HLS reconstructed from the page's own playback token),
+  - Loom embeds (resolved via Loom's `transcoded-url` API, because yt-dlp's Loom
+    extractor is currently broken),
+  - Vimeo / YouTube / Wistia embeds (handed to yt-dlp).
+- **Nothing is selected by default** — you usually want one video out of a thread.
+  The tool pre-selects only when it's fairly sure: the URL points at a comment
+  (`?p=…`), or the community **owner** posted a video reply inside your own
+  post/comment (the coaching-feedback case). Override with `--all` / `--video 1,3`.
+- **`npm run skool-web`** starts a local, dependency-free web server
+  (`http://localhost:4471`, opens automatically) that shows the whole comment
+  tree with **you** / **coach** badges, a checkbox per video, the best guess
+  highlighted, live download progress, and inline playback of what you download.
+  Nothing is hosted; it runs only while the command runs, only on your machine.
+- Output lands in `downloads/<Community>/Posts/<Post Title>/`, kept separate from
+  the course structure.
+
+### yt-dlp binary fix
+
+`yt-dlp-wrap` downloads the plain `yt-dlp` zipapp, which needs a system Python
+≥ 3.10 (missing on stock macOS). The fork downloads the standalone
+`yt-dlp_macos` / `yt-dlp_linux*` / `yt-dlp.exe` build instead, which bundles its
+own Python. `ffmpeg` still needs to be on your `PATH`.
 
 ## 🛡 Disclaimer
 

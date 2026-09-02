@@ -1,9 +1,13 @@
 {
   "name": "skool-downloader",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
-  "description": "CLI tool that creates offline backups of Skool.com courses, including video, assets, and attachments.",
+  "description": "CLI tool that creates offline backups of Skool.com courses, including video, assets, and attachments. Fork: also downloads videos from community posts/threads.",
   "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JoostPennings-STRAK/skool-downloader.git"
+  },
   "bin": {
     "skool": "./bin/skool.js"
   },
@@ -14,6 +18,9 @@
     "regenerate-index": "tsx src/cli.ts regenerate-index"
   },
   "author": "balmasi",
+  "contributors": [
+    "Joost Pennings (fork: post/thread downloads + web UI)"
+  ],
   "license": "CC-BY-NC-4.0",
   "keywords": [
     "skool",
