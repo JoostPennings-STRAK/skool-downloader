@@ -276,8 +276,10 @@ function createTaskRunner() {
         );
 
         await list.run();
-        if (typeof list.renderer?.end === 'function') {
-            list.renderer.end();
+        // `renderer` is marked private by listr2's types but is safe to flush here.
+        const listRenderer = (list as unknown as { renderer?: { end?: () => void } }).renderer;
+        if (typeof listRenderer?.end === 'function') {
+            listRenderer.end();
         }
         process.stdout.write('\n');
         await new Promise(resolve => setTimeout(resolve, 0));
