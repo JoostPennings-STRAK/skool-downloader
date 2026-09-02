@@ -10,9 +10,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install deps (dev deps included — the app runs straight from TS via tsx).
+# The app runs straight from TS via tsx (a runtime dependency, not a devDep).
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --omit=dev
 
 COPY . .
 
