@@ -8,7 +8,7 @@ const SKOOL_HLS_HOST = 'https://stream.video.skool.com';
 
 export type VideoSelector = (
     videos: ThreadVideo[],
-    context: { postTitle: string; preselectShortId?: string }
+    context: { postTitle: string; preselectShortId?: string; suggestedVideoIndexes: number[] }
 ) => Promise<ThreadVideo[]>;
 
 export type DownloadPostOptions = {
@@ -17,6 +17,8 @@ export type DownloadPostOptions = {
     logger?: Logger;
     /** Chooses which videos to download. Defaults to "all". */
     selectVideos?: VideoSelector;
+    /** Skip the initial thread scrape by supplying an already-fetched result. */
+    preloaded?: PostResult;
 };
 
 export type DownloadPostSummary = {
@@ -27,6 +29,8 @@ export type DownloadPostSummary = {
     selectedVideos: number;
     downloaded: number;
     failed: number;
+    /** Downloaded video files, paths relative to the `downloads/` root. */
+    files: string[];
 };
 
 function sanitizeName(value: string) {
@@ -177,8 +181,13 @@ export async function downloadPost(options: DownloadPostOptions): Promise<Downlo
     const downloader = new Downloader(logger);
 
     try {
-        logger.info('🚀 Reading post/thread...');
-        const result = await scraper.extractPostData(options.url);
+        let result = options.preloaded;
+        if (result) {
+            logger.info('🚀 Using already-loaded thread data...');
+        } else {
+            logger.info('🚀 Reading post/thread...');
+            result = await scraper.extractPostData(options.url);
+        }
 
         if (result.videos.length === 0) {
             throw new Error('No videos found in this post or its comments.');
@@ -188,7 +197,8 @@ export async function downloadPost(options: DownloadPostOptions): Promise<Downlo
         const select = options.selectVideos ?? (async (videos) => videos);
         const selected = await select(result.videos, {
             postTitle: result.postTitle,
-            preselectShortId: result.preselectShortId
+            preselectShortId: result.preselectShortId,
+            suggestedVideoIndexes: result.suggestedVideoIndexes
         });
 
         if (selected.length === 0) {
@@ -200,7 +210,8 @@ export async function downloadPost(options: DownloadPostOptions): Promise<Downlo
                 totalVideos: result.videos.length,
                 selectedVideos: 0,
                 downloaded: 0,
-                failed: 0
+                failed: 0,
+                files: []
             };
         }
 
@@ -221,6 +232,8 @@ export async function downloadPost(options: DownloadPostOptions): Promise<Downlo
         let failed = 0;
         const seenBase = new Map<string, number>();
         const rendered: Array<{ video: ThreadVideo; relPath?: string; linkUrl?: string }> = [];
+        const downloadsRoot = path.join(process.cwd(), 'downloads');
+        const files: string[] = [];
 
         for (const video of selected) {
             const label = `[${video.index}] ${video.source === 'post' ? 'post' : video.author}: ${video.title}`;
@@ -249,8 +262,13 @@ export async function downloadPost(options: DownloadPostOptions): Promise<Downlo
             try {
                 await downloader.downloadVideo(targetUrl, subDir, base);
                 downloaded += 1;
-                const rel = path.relative(baseOutputDir, path.join(subDir, `${base}.mp4`));
-                rendered.push({ video, relPath: rel.split(path.sep).join('/') });
+                const fullPath = path.join(subDir, `${base}.mp4`);
+                rendered.push({
+                    video,
+                    relPath: path.relative(baseOutputDir, fullPath).split(path.sep).join('/')
+                });
+                const fromRoot = path.relative(downloadsRoot, fullPath);
+                if (!fromRoot.startsWith('..')) files.push(fromRoot.split(path.sep).join('/'));
             } catch (err) {
                 logger.warn(`    ⚠️ Download failed: ${String(err)}`);
                 failed += 1;
@@ -275,7 +293,8 @@ export async function downloadPost(options: DownloadPostOptions): Promise<Downlo
             totalVideos: result.videos.length,
             selectedVideos: selected.length,
             downloaded,
-            failed
+            failed,
+            files
         };
     } finally {
         await scraper.close();

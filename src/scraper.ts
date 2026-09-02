@@ -89,6 +89,25 @@ export interface ThreadVideo {
     contentSnippet?: string;
 }
 
+/** One node (the post, or a comment) in the thread hierarchy. */
+export interface ThreadNode {
+    kind: 'post' | 'comment';
+    id: string;
+    /** First 8 chars of the id — matches the `?p=` permalink param. */
+    shortId: string;
+    author: string;
+    authorHandle: string;
+    snippet: string;
+    createdAt?: string;
+    /** Posted by the currently logged-in user. */
+    isCurrentUser: boolean;
+    /** Posted by the community owner (e.g. the coach giving feedback). */
+    isOwner: boolean;
+    /** `ThreadVideo.index` values for videos attached directly to this node. */
+    videoIndexes: number[];
+    children: ThreadNode[];
+}
+
 export interface PostResult {
     groupName: string;
     url: string;
@@ -100,6 +119,14 @@ export interface PostResult {
     /** `?p=` value from the input URL, if any — used to pre-select a comment video. */
     preselectShortId?: string;
     videos: ThreadVideo[];
+    /** The post + comments as a tree, for hierarchical selection UIs. */
+    threadTree: ThreadNode;
+    /**
+     * Best guess(es) at "the video you actually want": an owner's reply carrying
+     * a video, sitting directly under the current user's post/comment — or, if
+     * the URL had `?p=`, the video(s) on that comment. Empty when unsure.
+     */
+    suggestedVideoIndexes: number[];
 }
 
 function providerFromUrl(url: string): string {
@@ -700,6 +727,17 @@ export class Scraper {
             post.user?.name ||
             'Unknown';
 
+        const currentUserId: string | undefined = pageProps.self?.id || pageProps.currentUser?.id;
+        let ownerId: string | undefined = groupData.metadata?.createdBy;
+        try {
+            const ownerObj = JSON.parse(groupData.metadata?.owner || '{}');
+            ownerId = ownerObj?.id || ownerId;
+        } catch {
+            /* keep createdBy fallback */
+        }
+        const isBy = (userId: string | undefined, target: string | undefined) =>
+            !!userId && !!target && userId === target;
+
         const videos: ThreadVideo[] = [];
         let counter = 1;
 
@@ -773,10 +811,25 @@ export class Scraper {
             postTitle
         );
 
+        const threadTree: ThreadNode = {
+            kind: 'post',
+            id: postId,
+            shortId: String(postId).slice(0, 8),
+            author: postAuthor,
+            authorHandle: post.user?.name || 'unknown',
+            snippet: textSnippet(postMeta.content, 140) || postTitle,
+            createdAt: post.createdAt,
+            isCurrentUser: isBy(currentUserId, post.userId || post.user?.id),
+            isOwner: isBy(ownerId, post.userId || post.user?.id),
+            videoIndexes: videos.map((v) => v.index),
+            children: []
+        };
+
         // --- 2. Comments (nested), captured from the page's own API responses ---
         const seenComments = new Set<string>();
-        const walkComments = (node: any) => {
-            const c = node?.post;
+        const walkComments = (apiNode: any, siblings: ThreadNode[]) => {
+            const c = apiNode?.post;
+            let childBucket = siblings;
             if (c && !seenComments.has(c.id)) {
                 seenComments.add(c.id);
                 const cMeta = c.metadata || {};
@@ -793,6 +846,7 @@ export class Scraper {
                     contentSnippet: textSnippet(cMeta.content)
                 };
                 const fallbackTitle = textSnippet(cMeta.content) || `Comment by ${author}`;
+                const startIdx = videos.length;
 
                 const cVideoIds = String(cMeta.video_ids || '')
                     .split(',')
@@ -809,22 +863,72 @@ export class Scraper {
                     });
                 }
                 pushExternal(cMeta, base, fallbackTitle);
+
+                const commentUserId = c.user_id || c.user?.id;
+                const node: ThreadNode = {
+                    kind: 'comment',
+                    id: c.id,
+                    shortId: base.commentShortId,
+                    author,
+                    authorHandle: base.authorHandle,
+                    snippet: textSnippet(cMeta.content, 140) || `Comment by ${author}`,
+                    createdAt: c.created_at,
+                    isCurrentUser: isBy(currentUserId, commentUserId),
+                    isOwner: isBy(ownerId, commentUserId),
+                    videoIndexes: videos.slice(startIdx).map((v) => v.index),
+                    children: []
+                };
+                siblings.push(node);
+                childBucket = node.children;
             }
-            for (const child of node?.children || []) walkComments(child);
+            for (const child of apiNode?.children || []) walkComments(child, childBucket);
         };
 
         if (commentResponses.length === 0) {
             this.logger.warn('    ⚠️ No comments feed was captured — only post-level videos found.');
         }
         for (const payload of commentResponses) {
-            if (payload?.post_tree) walkComments(payload.post_tree);
-            if (payload?.pinned_post_tree?.post) walkComments(payload.pinned_post_tree);
+            if (payload?.post_tree) walkComments(payload.post_tree, threadTree.children);
+            if (payload?.pinned_post_tree?.post) walkComments(payload.pinned_post_tree, threadTree.children);
         }
 
-        // Re-number so indexes are contiguous regardless of capture order.
-        videos.forEach((v, i) => { v.index = i + 1; });
-
         await page.close();
+
+        // --- 3. Best-guess selection ---
+        // Anchor = the comment the URL points at (`?p=`), otherwise the current
+        // user's own post/comments in this thread.
+        const anchors: ThreadNode[] = [];
+        const collectAnchors = (node: ThreadNode) => {
+            if (preselectShortId ? node.shortId === preselectShortId : node.isCurrentUser) {
+                anchors.push(node);
+            }
+            node.children.forEach(collectAnchors);
+        };
+        collectAnchors(threadTree);
+
+        // Inside an anchor's subtree, an owner's comment carrying a video is
+        // almost certainly the feedback you're after.
+        const ownerFeedback: number[] = [];
+        const scanSubtree = (node: ThreadNode, insideAnchor: boolean) => {
+            const nowInside = insideAnchor || anchors.includes(node);
+            for (const child of node.children) {
+                if (nowInside && child.isOwner && !child.isCurrentUser && child.videoIndexes.length > 0) {
+                    ownerFeedback.push(...child.videoIndexes);
+                }
+                scanSubtree(child, nowInside);
+            }
+        };
+        scanSubtree(threadTree, false);
+
+        let suggestedVideoIndexes: number[] = [];
+        if (ownerFeedback.length > 0) {
+            suggestedVideoIndexes = [...new Set(ownerFeedback)];
+        } else if (preselectShortId) {
+            // The URL points straight at someone else's video comment.
+            suggestedVideoIndexes = anchors
+                .filter((n) => !n.isCurrentUser)
+                .flatMap((n) => n.videoIndexes);
+        }
 
         return {
             groupName,
@@ -835,7 +939,9 @@ export class Scraper {
             postTitle,
             postContentHtml: skoolTextToHtml(postMeta.content || ''),
             preselectShortId,
-            videos
+            videos,
+            threadTree,
+            suggestedVideoIndexes
         };
     }
 

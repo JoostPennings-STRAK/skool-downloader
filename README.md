@@ -90,18 +90,35 @@ npm run skool "https://www.skool.com/your-community/my-post-slug"
 ```
 
 It finds every video in the thread (native Skool videos plus Loom / Vimeo /
-YouTube / Wistia embeds in comments) and, when there's more than one, lets you
-pick which to download. Non-interactive options:
+YouTube / Wistia embeds in comments). By default **nothing is pre-selected** —
+you pick the one(s) you want. Exceptions: if the URL points at a comment
+(`...?p=abc123`), or the tool spots the community owner's video reply sitting
+under your own post/comment, that one starts selected.
+
+Non-interactive options:
 
 ```bash
 npm run skool post "<post-url>" --all          # download all of them
 npm run skool post "<post-url>" --video 2,4    # download only #2 and #4
 ```
 
-If the URL points straight at a comment (`...?p=abc123`), that comment's video
-is pre-selected. Output goes to `downloads/<Community>/Posts/<Post Title>/`
-(the post video as `post-video.mp4`, comment videos under `comments/`), separate
-from the course structure.
+Output goes to `downloads/<Community>/Posts/<Post Title>/` (the post video as
+`post-video.mp4`, comment videos under `comments/`), separate from courses.
+
+### Web UI (browser)
+
+For threads with lots of videos, a local browser UI shows the whole comment
+tree so you can pick the right one visually:
+
+```bash
+npm run skool-web
+```
+
+This starts a local server (`http://localhost:4471`) and opens it in your
+browser. Paste a thread URL, and you get the nested comments with **you** /
+**coach** badges, a checkbox on every video, the tool's best guess highlighted,
+and inline playback of anything you download. Nothing is hosted — it only runs
+while the command is running, and only on your machine.
 
 ## 📁 Output Structure
 

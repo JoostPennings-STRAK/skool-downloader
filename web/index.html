@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Skool Downloader</title>
+<style>
+    :root {
+        --bg: #f4f4f6; --panel: #fff; --panel-2: #f7f8fb; --text: #14161d; --muted: #6b7280;
+        --border: #e3e5ea; --accent: #2563eb; --accent-soft: #e8effc; --good: #15803d; --warn: #b45309;
+    }
+    @media (prefers-color-scheme: dark) {
+        :root {
+            --bg: #0f1115; --panel: #171a21; --panel-2: #1e222b; --text: #e6e8ec; --muted: #9aa1ad;
+            --border: #2a2f3a; --accent: #5b9dff; --accent-soft: #1c2c47; --good: #4ade80; --warn: #fbbf24;
+        }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text);
+        font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .wrap { max-width: 900px; margin: 0 auto; padding: 24px 20px 120px; }
+    h1 { font-size: 1.15rem; margin: 0; }
+    .top { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+    .auth { font-size: 0.8rem; color: var(--muted); margin-bottom: 18px; }
+    .auth.bad { color: var(--warn); }
+    .bar { display: flex; gap: 8px; margin-bottom: 18px; }
+    input[type=text] { flex: 1; padding: 9px 11px; border: 1px solid var(--border); border-radius: 8px;
+        background: var(--panel); color: var(--text); font-size: 0.9rem; }
+    button { padding: 9px 14px; border: 0; border-radius: 8px; background: var(--accent); color: #fff;
+        font-weight: 600; font-size: 0.88rem; cursor: pointer; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    button.ghost { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
+    .post-title { font-size: 1.05rem; font-weight: 700; margin: 0 0 2px; }
+    .group { color: var(--muted); font-size: 0.85rem; margin-bottom: 14px; }
+    .node { border-left: 2px solid var(--border); padding-left: 12px; margin: 10px 0 0 2px; }
+    .node.me { border-left-color: var(--accent); }
+    .node-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+    .who { font-weight: 600; }
+    .chip { font-size: 0.68rem; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px;
+        border-radius: 999px; background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); }
+    .chip.me { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+    .chip.coach { background: #fef3c7; color: #92400e; border-color: transparent; }
+    @media (prefers-color-scheme: dark) { .chip.coach { background: #3a2e12; color: #fbbf24; } }
+    .time { color: var(--muted); font-size: 0.78rem; }
+    .snip { color: var(--muted); font-size: 0.85rem; margin: 2px 0 0; }
+    .vid { display: flex; align-items: center; gap: 9px; margin: 8px 0 0; padding: 7px 9px;
+        background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+    .vid.suggested { border-color: var(--accent); background: var(--accent-soft); }
+    .vid input { width: 16px; height: 16px; accent-color: var(--accent); }
+    .vid .vtitle { flex: 1; font-weight: 500; }
+    .vid .star { color: var(--accent); font-size: 0.75rem; font-weight: 700; }
+    .prov { font-size: 0.7rem; text-transform: uppercase; padding: 1px 6px; border-radius: 4px;
+        background: var(--panel); border: 1px solid var(--border); color: var(--muted); }
+    .footer { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel);
+        border-top: 1px solid var(--border); padding: 12px 20px; display: flex; justify-content: center; }
+    .footer-inner { width: 100%; max-width: 900px; display: flex; align-items: center; gap: 14px; }
+    .count { color: var(--muted); font-size: 0.85rem; }
+    .msg { margin: 14px 0; padding: 10px 12px; border-radius: 8px; background: var(--panel-2);
+        border: 1px solid var(--border); font-size: 0.88rem; }
+    .msg.err { color: var(--warn); }
+    pre.log { background: #0b0d11; color: #d6dae2; padding: 12px; border-radius: 8px; font-size: 0.8rem;
+        max-height: 260px; overflow: auto; white-space: pre-wrap; margin: 0; }
+    .files { margin-top: 14px; display: grid; gap: 14px; }
+    .files video { width: 100%; border-radius: 8px; background: #000; }
+    .files a { color: var(--accent); font-size: 0.85rem; }
+    .hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+    <div class="top"><h1>🎬 Skool Downloader</h1></div>
+    <div class="auth" id="auth">checking session…</div>
+
+    <div class="bar">
+        <input type="text" id="url" placeholder="https://www.skool.com/community/post-slug?p=abc123" autocomplete="off">
+        <button id="load">Load thread</button>
+    </div>
+
+    <div id="message" class="msg hidden"></div>
+
+    <div id="result" class="card hidden">
+        <p class="post-title" id="postTitle"></p>
+        <p class="group" id="group"></p>
+        <div id="tree"></div>
+    </div>
+
+    <div id="progress" class="hidden">
+        <div class="msg" id="progressHead">Downloading…</div>
+        <pre class="log" id="log"></pre>
+        <div class="files" id="fileList"></div>
+    </div>
+</div>
+
+<div class="footer hidden" id="footer">
+    <div class="footer-inner">
+        <button id="download">Download selected</button>
+        <span class="count" id="count">0 selected</span>
+        <button class="ghost" id="clear">Clear</button>
+    </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let current = null;              // last loaded thread payload
+const selected = new Set();      // selected video indexes
+
+function relTime(iso) {
+    if (!iso) return '';
+    const d = new Date(iso), s = (Date.now() - d.getTime()) / 1000;
+    if (s < 90) return 'just now';
+    if (s < 3600) return Math.round(s / 60) + 'm ago';
+    if (s < 86400) return Math.round(s / 3600) + 'h ago';
+    if (s < 2592000) return Math.round(s / 86400) + 'd ago';
+    return d.toLocaleDateString();
+}
+function fmtDur(ms) {
+    if (!ms) return '';
+    const t = Math.round(ms / 1000);
+    return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0');
+}
+
+async function checkAuth() {
+    try {
+        const r = await fetch('/api/auth').then((x) => x.json());
+        const el = $('auth');
+        if (r.status === 'valid') {
+            el.textContent = 'Skool session active' + (r.expiresAt ? ' · expires ' + new Date(r.expiresAt).toLocaleDateString() : '');
+            el.classList.remove('bad');
+        } else {
+            el.textContent = 'No valid Skool session — run `npm run login` first';
+            el.classList.add('bad');
+        }
+    } catch { /* ignore */ }
+}
+
+function showMessage(text, isError) {
+    const m = $('message');
+    m.textContent = text;
+    m.className = 'msg' + (isError ? ' err' : '');
+}
+function hideMessage() { $('message').className = 'msg hidden'; }
+
+function videoRow(idx) {
+    const v = current.videos.find((x) => x.index === idx);
+    if (!v) return null;
+    const suggested = current.suggestedVideoIndexes.includes(idx);
+    const row = document.createElement('label');
+    row.className = 'vid' + (suggested ? ' suggested' : '');
+    row.innerHTML = `
+        <input type="checkbox" data-idx="${idx}" ${selected.has(idx) ? 'checked' : ''}>
+        <span class="prov">${v.provider}</span>
+        <span class="vtitle">${escapeHtml(v.title)}</span>
+        ${v.durationMs ? `<span class="time">${fmtDur(v.durationMs)}</span>` : ''}
+        ${suggested ? '<span class="star">★ likely this one</span>' : ''}`;
+    row.querySelector('input').addEventListener('change', (e) => {
+        e.target.checked ? selected.add(idx) : selected.delete(idx);
+        refreshCount();
+    });
+    return row;
+}
+
+function renderNode(node, depth) {
+    const el = document.createElement('div');
+    el.className = 'node' + (node.isCurrentUser ? ' me' : '');
+    const badges = [];
+    if (node.isCurrentUser) badges.push('<span class="chip me">you</span>');
+    if (node.isOwner) badges.push('<span class="chip coach">coach</span>');
+    if (node.kind === 'post') badges.push('<span class="chip">post</span>');
+    el.innerHTML = `
+        <div class="node-head">
+            <span class="who">${escapeHtml(node.author)}</span>
+            ${badges.join('')}
+            <span class="time">${relTime(node.createdAt)}</span>
+        </div>
+        <p class="snip">${escapeHtml(node.snippet || '')}</p>`;
+    for (const idx of node.videoIndexes) {
+        const r = videoRow(idx);
+        if (r) el.appendChild(r);
+    }
+    for (const child of node.children) el.appendChild(renderNode(child, depth + 1));
+    return el;
+}
+
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+function refreshCount() {
+    $('count').textContent = selected.size + ' selected';
+    $('download').disabled = selected.size === 0;
+}
+
+async function loadThread() {
+    const url = $('url').value.trim();
+    if (!url) return;
+    hideMessage();
+    $('load').disabled = true;
+    $('load').textContent = 'Loading…';
+    $('result').classList.add('hidden');
+    $('footer').classList.add('hidden');
+    $('progress').classList.add('hidden');
+    selected.clear();
+    try {
+        const r = await fetch('/api/thread?url=' + encodeURIComponent(url));
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'Failed to load');
+        current = data;
+        data.suggestedVideoIndexes.forEach((i) => selected.add(i));
+        $('postTitle').textContent = data.postTitle;
+        $('group').textContent = data.groupName + ' · ' + data.videos.length + ' video(s) in thread';
+        $('tree').innerHTML = '';
+        $('tree').appendChild(renderNode(data.tree, 0));
+        $('result').classList.remove('hidden');
+        $('footer').classList.remove('hidden');
+        refreshCount();
+        if (!data.videos.length) showMessage('No videos found in this thread.', false);
+    } catch (err) {
+        showMessage(String(err.message || err), true);
+    } finally {
+        $('load').disabled = false;
+        $('load').textContent = 'Load thread';
+    }
+}
+
+async function startDownload() {
+    if (!current || selected.size === 0) return;
+    $('download').disabled = true;
+    $('progress').classList.remove('hidden');
+    $('progressHead').className = 'msg';
+    $('progressHead').textContent = 'Downloading…';
+    $('log').textContent = '';
+    $('fileList').innerHTML = '';
+
+    const res = await fetch('/api/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: current.url, indexes: [...selected] })
+    });
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop();
+        for (const line of lines) {
+            if (!line.trim()) continue;
+            const ev = JSON.parse(line);
+            if (ev.type === 'log') {
+                $('log').textContent += ev.line + '\n';
+                $('log').scrollTop = $('log').scrollHeight;
+            } else if (ev.type === 'error') {
+                $('progressHead').className = 'msg err';
+                $('progressHead').textContent = 'Error: ' + ev.error;
+            } else if (ev.type === 'done') {
+                showDone(ev.summary);
+            }
+        }
+    }
+    $('download').disabled = false;
+}
+
+function showDone(s) {
+    $('progressHead').className = 'msg';
+    $('progressHead').textContent = `Done — ${s.downloaded} downloaded${s.failed ? ', ' + s.failed + ' failed' : ''}. Saved in ${s.outputDir}`;
+    const list = $('fileList');
+    for (const f of s.files || []) {
+        const div = document.createElement('div');
+        div.innerHTML = `
+            <video controls preload="metadata" src="/api/file?path=${encodeURIComponent(f)}"></video>
+            <a href="/api/file?path=${encodeURIComponent(f)}" download>${escapeHtml(f.split('/').pop())}</a>`;
+        list.appendChild(div);
+    }
+}
+
+$('load').addEventListener('click', loadThread);
+$('url').addEventListener('keydown', (e) => { if (e.key === 'Enter') loadThread(); });
+$('download').addEventListener('click', startDownload);
+$('clear').addEventListener('click', () => {
+    selected.clear();
+    document.querySelectorAll('.vid input').forEach((c) => (c.checked = false));
+    refreshCount();
+});
+checkAuth();
+</script>
+</body>
+</html>

@@ -176,14 +176,13 @@ function buildVideoSelector(
             return videos.filter((v) => wanted.has(v.index));
         }
 
-        const permalinked = ctx.preselectShortId
-            ? videos.filter((v) => v.commentShortId === ctx.preselectShortId)
-            : [];
+        const suggested = videos.filter((v) => ctx.suggestedVideoIndexes.includes(v.index));
 
-        if (opts.all || videos.length === 1) return videos;
+        if (opts.all) return videos;
+        if (videos.length === 1) return videos;
 
         if (!interactive) {
-            return permalinked.length > 0 ? permalinked : videos;
+            return suggested.length > 0 ? suggested : videos;
         }
 
         const choice = await multiselect({
@@ -193,8 +192,10 @@ function buildVideoSelector(
                 label: `${v.source === 'post' ? '📌 Post' : `💬 ${v.author}`}: ${v.title}`,
                 hint: [v.provider, formatDuration(v.durationMs)].filter(Boolean).join(' · ') || undefined
             })),
-            initialValues:
-                permalinked.length > 0 ? permalinked.map((v) => v.index) : videos.map((v) => v.index),
+            // Nothing pre-selected (you usually want just one) — unless the tool
+            // has a confident guess (a `?p=` comment, or the coach's video reply
+            // to your post), then start on that.
+            initialValues: suggested.map((v) => v.index),
             required: true
         });
         handleCancel(choice);

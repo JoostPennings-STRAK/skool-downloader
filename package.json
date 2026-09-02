@@ -9,6 +9,7 @@
   },
   "scripts": {
     "skool": "tsx src/cli.ts",
+    "skool-web": "tsx src/server.ts",
     "login": "tsx src/cli.ts login",
     "regenerate-index": "tsx src/cli.ts regenerate-index"
   },
@@ -24,6 +25,7 @@
   "files": [
     "bin/",
     "src/",
+    "web/",
     "README.md",
     "LICENSE",
     "package.json",
