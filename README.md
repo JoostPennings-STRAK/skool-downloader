@@ -126,8 +126,38 @@ npm run skool-web
 This starts a local server (`http://localhost:4471`) and opens it in your
 browser. Paste a thread URL, and you get the nested comments with **you** /
 **coach** badges, a checkbox on every video, the tool's best guess highlighted,
-and inline playback of anything you download. Nothing is hosted — it only runs
-while the command is running, and only on your machine.
+and inline playback of anything you download.
+
+The UI has three tabs:
+
+- **Download** — the thread picker described above.
+- **Library** — every `.mp4` under `downloads/`, newest first, with inline
+  playback, a download button, and delete.
+- **Settings** — import your Skool session by uploading/pasting a `cookies.txt`
+  exported with the *"Get cookies.txt LOCALLY"* browser extension (needed when
+  running headless / in Docker, where `npm run login` can't open a browser).
+
+### Running as a service (Docker)
+
+`Dockerfile` builds a long-lived container of the web UI (Playwright + Chromium
++ `ffmpeg` + `yt-dlp` baked in). Mount two volumes:
+
+| Container path   | Purpose                                    |
+|------------------|--------------------------------------------|
+| `/app/downloads` | downloaded videos (shown in **Library**)   |
+| `/app/.auth`     | `cookies.txt` + `storage_state.json`       |
+
+```bash
+docker build -t skool-downloader .
+docker run -p 4471:4471 \
+  -v "$PWD/downloads:/app/downloads" -v "$PWD/auth:/app/.auth" \
+  skool-downloader
+```
+
+Then open the **Settings** tab once to import a `cookies.txt`. There is no
+built-in authentication — put it behind a reverse proxy / VPN if it's not
+localhost-only. `.gitea/workflows/build-deploy.yml` builds and deploys it to the
+homelab on every push to `main`.
 
 ## 📁 Output Structure
 

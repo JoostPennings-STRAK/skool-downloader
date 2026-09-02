@@ -1,0 +1,15 @@
+node_modules
+downloads
+.auth
+.git
+.gitignore
+_inspect
+inspect-post.ts
+bin/yt-dlp
+bin/yt-dlp.exe
+bin/ffmpeg
+bin/ffprobe
+cookies.txt
+storage_state.json
+*.md
+!README.md

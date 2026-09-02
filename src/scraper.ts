@@ -1,7 +1,7 @@
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import fs from 'fs-extra';
 import { createConsoleLogger, type Logger } from './logger.js';
-import { STORAGE_STATE_PATH } from './auth.js';
+import { STORAGE_STATE_PATH, skoolCookiesFromTxt } from './auth.js';
 
 export interface Resource {
     title: string;
@@ -197,10 +197,21 @@ export class Scraper {
 
     async init() {
         this.browser = await chromium.launch({ headless: true });
-        if (fs.existsSync(STORAGE_STATE_PATH)) {
-            this.context = await this.browser.newContext({ storageState: STORAGE_STATE_PATH });
-        } else {
-            this.context = await this.browser.newContext();
+        const hasState = fs.existsSync(STORAGE_STATE_PATH);
+        this.context = await this.browser.newContext(
+            hasState ? { storageState: STORAGE_STATE_PATH } : {}
+        );
+
+        // Fallback: if the storage state carries no Skool cookies (e.g. it was
+        // derived from a cookies.txt that failed to convert cleanly), inject the
+        // Skool cookies straight from cookies.txt.
+        const cookies = await this.context.cookies();
+        if (!cookies.some((c) => c.domain.includes('skool.com'))) {
+            const fromTxt = await skoolCookiesFromTxt();
+            if (fromTxt.length > 0) {
+                await this.context.addCookies(fromTxt);
+                this.logger.info(`Loaded ${fromTxt.length} Skool cookie(s) from cookies.txt`);
+            }
         }
     }
 

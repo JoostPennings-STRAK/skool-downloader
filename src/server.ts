@@ -5,7 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { Scraper, type PostResult } from './scraper.js';
 import { downloadPost } from './post.js';
-import { getAuthStatus } from './auth.js';
+import { getAuthStatus, importCookiesTxt } from './auth.js';
 import type { Logger } from './logger.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -22,11 +22,16 @@ function send(res: http.ServerResponse, status: number, body: unknown, type = 'a
     res.end(payload);
 }
 
-async function readBody(req: http.IncomingMessage): Promise<any> {
+async function readText(req: http.IncomingMessage): Promise<string> {
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(chunk as Buffer);
-    if (chunks.length === 0) return {};
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    return Buffer.concat(chunks).toString('utf8');
+}
+
+async function readBody(req: http.IncomingMessage): Promise<any> {
+    const text = await readText(req);
+    if (!text) return {};
+    return JSON.parse(text);
 }
 
 async function handleThread(res: http.ServerResponse, url: string) {
@@ -83,17 +88,113 @@ async function handleDownload(res: http.ServerResponse, body: any) {
     }
 }
 
-/** Serves a downloaded file for in-page preview. Confined to ./downloads. */
-function handleFile(res: http.ServerResponse, rel: string) {
+/** Resolves a `downloads/`-relative path, or null if it escapes the root. */
+function resolveInDownloads(rel: string): string | null {
     const target = path.resolve(DOWNLOADS_DIR, rel);
-    if (!target.startsWith(DOWNLOADS_DIR + path.sep) || !fs.existsSync(target)) {
+    if (target !== DOWNLOADS_DIR && !target.startsWith(DOWNLOADS_DIR + path.sep)) return null;
+    return target;
+}
+
+/** Serves a downloaded file for in-page preview or download. Confined to ./downloads. */
+function handleFile(req: http.IncomingMessage, res: http.ServerResponse, rel: string, asAttachment: boolean) {
+    const target = resolveInDownloads(rel);
+    if (!target || !fs.existsSync(target) || !fs.statSync(target).isFile()) {
         send(res, 404, { error: 'Not found' });
         return;
     }
     const ext = path.extname(target).toLowerCase();
     const type = ext === '.mp4' ? 'video/mp4' : ext === '.html' ? 'text/html' : 'application/octet-stream';
-    res.writeHead(200, { 'Content-Type': type });
+    const size = fs.statSync(target).size;
+    const headers: Record<string, string> = {
+        'Content-Type': type,
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'no-store'
+    };
+    if (asAttachment) {
+        headers['Content-Disposition'] = `attachment; filename="${path.basename(target).replace(/"/g, '')}"`;
+    }
+
+    const range = req.headers.range;
+    const match = range && /^bytes=(\d*)-(\d*)$/.exec(range);
+    if (match) {
+        const start = match[1] ? parseInt(match[1], 10) : 0;
+        const end = match[2] ? parseInt(match[2], 10) : size - 1;
+        if (start > end || end >= size) {
+            res.writeHead(416, { 'Content-Range': `bytes */${size}` });
+            res.end();
+            return;
+        }
+        res.writeHead(206, {
+            ...headers,
+            'Content-Range': `bytes ${start}-${end}/${size}`,
+            'Content-Length': String(end - start + 1)
+        });
+        fs.createReadStream(target, { start, end }).pipe(res);
+        return;
+    }
+
+    res.writeHead(200, { ...headers, 'Content-Length': String(size) });
     fs.createReadStream(target).pipe(res);
+}
+
+/** Lists downloaded video files, newest first. */
+async function handleLibrary(res: http.ServerResponse) {
+    const items: { path: string; name: string; dir: string; size: number; mtime: number }[] = [];
+    async function walk(abs: string) {
+        let entries: string[] = [];
+        try {
+            entries = await fs.readdir(abs);
+        } catch {
+            return;
+        }
+        for (const entry of entries) {
+            const full = path.join(abs, entry);
+            const stat = await fs.stat(full);
+            if (stat.isDirectory()) {
+                await walk(full);
+            } else if (path.extname(entry).toLowerCase() === '.mp4') {
+                const rel = path.relative(DOWNLOADS_DIR, full);
+                items.push({
+                    path: rel,
+                    name: entry,
+                    dir: path.dirname(rel) === '.' ? '' : path.dirname(rel),
+                    size: stat.size,
+                    mtime: stat.mtimeMs
+                });
+            }
+        }
+    }
+    await fs.ensureDir(DOWNLOADS_DIR);
+    await walk(DOWNLOADS_DIR);
+    items.sort((a, b) => b.mtime - a.mtime);
+    send(res, 200, { items });
+}
+
+/** Deletes one downloaded file and prunes now-empty parent folders. */
+async function handleDelete(res: http.ServerResponse, rel: string) {
+    const target = resolveInDownloads(rel);
+    if (!target || target === DOWNLOADS_DIR || !fs.existsSync(target) || !fs.statSync(target).isFile()) {
+        send(res, 404, { error: 'Not found' });
+        return;
+    }
+    await fs.remove(target);
+    let dir = path.dirname(target);
+    while (dir !== DOWNLOADS_DIR && dir.startsWith(DOWNLOADS_DIR + path.sep)) {
+        const remaining = await fs.readdir(dir);
+        if (remaining.length > 0) break;
+        await fs.remove(dir);
+        dir = path.dirname(dir);
+    }
+    send(res, 200, { ok: true });
+}
+
+async function handleImport(res: http.ServerResponse, raw: string) {
+    try {
+        const status = await importCookiesTxt(raw);
+        send(res, 200, { status: status.status, expiresAt: status.expiresAt ?? null });
+    } catch (err) {
+        send(res, 400, { error: String(err instanceof Error ? err.message : err) });
+    }
 }
 
 const server = http.createServer(async (req, res) => {
@@ -114,12 +215,24 @@ const server = http.createServer(async (req, res) => {
             await handleThread(res, url);
             return;
         }
+        if (req.method === 'POST' && reqUrl.pathname === '/api/auth/import') {
+            await handleImport(res, await readText(req));
+            return;
+        }
         if (req.method === 'POST' && reqUrl.pathname === '/api/download') {
             await handleDownload(res, await readBody(req));
             return;
         }
+        if (req.method === 'GET' && reqUrl.pathname === '/api/library') {
+            await handleLibrary(res);
+            return;
+        }
         if (req.method === 'GET' && reqUrl.pathname === '/api/file') {
-            handleFile(res, reqUrl.searchParams.get('path') || '');
+            handleFile(req, res, reqUrl.searchParams.get('path') || '', reqUrl.searchParams.get('dl') === '1');
+            return;
+        }
+        if (req.method === 'DELETE' && reqUrl.pathname === '/api/file') {
+            await handleDelete(res, reqUrl.searchParams.get('path') || '');
             return;
         }
         send(res, 404, { error: 'Not found' });

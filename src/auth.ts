@@ -11,6 +11,77 @@ export async function ensureAuthDir() {
     await fs.ensureDir(AUTH_DIR);
 }
 
+type PlaywrightCookie = {
+    name: string;
+    value: string;
+    domain: string;
+    path: string;
+    expires: number;
+    httpOnly: boolean;
+    secure: boolean;
+    sameSite: 'Strict' | 'Lax' | 'None';
+};
+
+/**
+ * Parses a Netscape-format `cookies.txt` (as produced by the "Get cookies.txt
+ * LOCALLY" browser extension) into Playwright cookie objects. Honours the
+ * `#HttpOnly_` line prefix that some exporters use.
+ */
+export function parseNetscapeCookies(raw: string): PlaywrightCookie[] {
+    const cookies: PlaywrightCookie[] = [];
+    for (const line of raw.split(/\r?\n/)) {
+        let text = line;
+        let httpOnly = false;
+        if (text.startsWith('#HttpOnly_')) {
+            text = text.slice('#HttpOnly_'.length);
+            httpOnly = true;
+        } else if (text.startsWith('#') || text.trim() === '') {
+            continue;
+        }
+        const parts = text.split('\t');
+        if (parts.length < 7) continue;
+        const [domain, , cookiePath, secure, expires, name, ...valueParts] = parts;
+        const expiresNum = Number(expires);
+        cookies.push({
+            name,
+            value: valueParts.join('\t'),
+            domain,
+            path: cookiePath || '/',
+            expires: Number.isFinite(expiresNum) && expiresNum > 0 ? expiresNum : -1,
+            httpOnly,
+            secure: secure.toUpperCase() === 'TRUE',
+            sameSite: 'Lax'
+        });
+    }
+    return cookies;
+}
+
+/** Skool cookies from a saved `cookies.txt`, for use as a scraper fallback. */
+export async function skoolCookiesFromTxt(): Promise<PlaywrightCookie[]> {
+    if (!(await fs.pathExists(COOKIES_TXT_PATH))) return [];
+    const raw = await fs.readFile(COOKIES_TXT_PATH, 'utf8');
+    return parseNetscapeCookies(raw).filter((c) => c.domain.includes('skool.com'));
+}
+
+/**
+ * Imports a Skool session from a pasted/uploaded `cookies.txt`. Stores the raw
+ * file for yt-dlp and a derived `storage_state.json` for Playwright, then
+ * reports the resulting auth status.
+ */
+export async function importCookiesTxt(raw: string): Promise<AuthStatus> {
+    const cookies = parseNetscapeCookies(raw);
+    const skoolCookies = cookies.filter((c) => c.domain.includes('skool.com'));
+    if (skoolCookies.length === 0) {
+        throw new Error('No skool.com cookies found in this file. Export it from skool.com while logged in.');
+    }
+
+    await ensureAuthDir();
+    await fs.writeFile(COOKIES_TXT_PATH, raw.endsWith('\n') ? raw : `${raw}\n`);
+    await fs.writeJson(STORAGE_STATE_PATH, { cookies, origins: [] }, { spaces: 2 });
+
+    return getAuthStatus();
+}
+
 export type AuthStatus = {
     status: 'valid' | 'expired' | 'missing' | 'invalid' | 'no-expiry';
     expiresAt?: Date;

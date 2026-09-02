@@ -20,7 +20,11 @@
         font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     .wrap { max-width: 900px; margin: 0 auto; padding: 24px 20px 120px; }
     h1 { font-size: 1.15rem; margin: 0; }
-    .top { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+    .top { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+    .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 18px; }
+    .tab { padding: 8px 14px; border: 0; background: none; color: var(--muted); font-weight: 600;
+        font-size: 0.9rem; cursor: pointer; border-bottom: 2px solid transparent; border-radius: 0; }
+    .tab.active { color: var(--text); border-bottom-color: var(--accent); }
     .auth { font-size: 0.8rem; color: var(--muted); margin-bottom: 18px; }
     .auth.bad { color: var(--warn); }
     .bar { display: flex; gap: 8px; margin-bottom: 18px; }
@@ -30,6 +34,8 @@
         font-weight: 600; font-size: 0.88rem; cursor: pointer; }
     button:disabled { opacity: 0.45; cursor: not-allowed; }
     button.ghost { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+    button.danger { background: none; color: var(--warn); border: 1px solid var(--border); padding: 5px 10px;
+        font-size: 0.8rem; }
     .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
     .post-title { font-size: 1.05rem; font-weight: 700; margin: 0 0 2px; }
     .group { color: var(--muted); font-size: 0.85rem; margin-bottom: 14px; }
@@ -59,40 +65,104 @@
     .msg { margin: 14px 0; padding: 10px 12px; border-radius: 8px; background: var(--panel-2);
         border: 1px solid var(--border); font-size: 0.88rem; }
     .msg.err { color: var(--warn); }
+    .msg.ok { color: var(--good); }
     pre.log { background: #0b0d11; color: #d6dae2; padding: 12px; border-radius: 8px; font-size: 0.8rem;
         max-height: 260px; overflow: auto; white-space: pre-wrap; margin: 0; }
     .files { margin-top: 14px; display: grid; gap: 14px; }
     .files video { width: 100%; border-radius: 8px; background: #000; }
     .files a { color: var(--accent); font-size: 0.85rem; }
+    .lib-group { margin-bottom: 22px; }
+    .lib-group h3 { font-size: 0.9rem; margin: 0 0 10px; color: var(--muted); font-weight: 600;
+        word-break: break-word; }
+    .lib-item { border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-bottom: 12px;
+        background: var(--panel); }
+    .lib-item video { width: 100%; border-radius: 8px; background: #000; margin-bottom: 8px; }
+    .lib-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+    .lib-name { flex: 1; font-weight: 500; word-break: break-word; min-width: 180px; }
+    .lib-size { color: var(--muted); font-size: 0.8rem; }
+    .dl-link { display: inline-block; padding: 6px 12px; border-radius: 8px; background: var(--accent);
+        color: #fff !important; font-weight: 600; font-size: 0.82rem; text-decoration: none; }
+    label.field { display: block; font-weight: 600; font-size: 0.85rem; margin: 16px 0 6px; }
+    textarea { width: 100%; min-height: 120px; padding: 10px; border: 1px solid var(--border);
+        border-radius: 8px; background: var(--panel); color: var(--text); font: 0.8rem/1.4 ui-monospace, monospace; }
+    ol.steps { padding-left: 20px; color: var(--muted); font-size: 0.88rem; line-height: 1.7; }
+    ol.steps code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
     .hidden { display: none; }
 </style>
 </head>
 <body>
 <div class="wrap">
     <div class="top"><h1>🎬 Skool Downloader</h1></div>
-    <div class="auth" id="auth">checking session…</div>
 
-    <div class="bar">
-        <input type="text" id="url" placeholder="https://www.skool.com/community/post-slug?p=abc123" autocomplete="off">
-        <button id="load">Load thread</button>
+    <div class="tabs">
+        <button class="tab active" data-tab="download">Download</button>
+        <button class="tab" data-tab="library">Library</button>
+        <button class="tab" data-tab="settings">Settings</button>
     </div>
 
-    <div id="message" class="msg hidden"></div>
+    <!-- ===== Download tab ===== -->
+    <section id="tab-download">
+        <div class="auth" id="auth">checking session…</div>
 
-    <div id="result" class="card hidden">
-        <p class="post-title" id="postTitle"></p>
-        <p class="group" id="group"></p>
-        <div id="tree"></div>
-    </div>
+        <div class="bar">
+            <input type="text" id="url" placeholder="https://www.skool.com/community/post-slug?p=abc123" autocomplete="off">
+            <button id="load">Load thread</button>
+        </div>
 
-    <div id="progress" class="hidden">
-        <div class="msg" id="progressHead">Downloading…</div>
-        <pre class="log" id="log"></pre>
-        <div class="files" id="fileList"></div>
-    </div>
+        <div id="message" class="msg hidden"></div>
+
+        <div id="result" class="card hidden">
+            <p class="post-title" id="postTitle"></p>
+            <p class="group" id="group"></p>
+            <div id="tree"></div>
+        </div>
+
+        <div id="progress" class="hidden">
+            <div class="msg" id="progressHead">Downloading…</div>
+            <pre class="log" id="log"></pre>
+            <div class="files" id="fileList"></div>
+        </div>
+    </section>
+
+    <!-- ===== Library tab ===== -->
+    <section id="tab-library" class="hidden">
+        <div class="bar">
+            <button class="ghost" id="libRefresh">Refresh</button>
+        </div>
+        <div id="libMessage" class="msg hidden"></div>
+        <div id="libList"></div>
+    </section>
+
+    <!-- ===== Settings tab ===== -->
+    <section id="tab-settings" class="hidden">
+        <div class="auth" id="settingsStatus">checking session…</div>
+
+        <div class="card">
+            <p style="margin-top:0"><strong>Import your Skool session</strong></p>
+            <ol class="steps">
+                <li>Install the <em>“Get cookies.txt LOCALLY”</em> browser extension
+                    (<a href="https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc" target="_blank" rel="noopener">Chrome</a> /
+                    <a href="https://addons.mozilla.org/firefox/addon/get-cookies-txt-locally/" target="_blank" rel="noopener">Firefox</a>).</li>
+                <li>Open <code>skool.com</code> in that browser while logged in.</li>
+                <li>Click the extension → <em>Export</em> (or “Current site”) → save the <code>cookies.txt</code>.</li>
+                <li>Upload or paste that file below.</li>
+            </ol>
+
+            <label class="field" for="cookieFile">Upload cookies.txt</label>
+            <input type="file" id="cookieFile" accept=".txt,text/plain">
+
+            <label class="field" for="cookiePaste">…or paste its contents</label>
+            <textarea id="cookiePaste" placeholder="# Netscape HTTP Cookie File&#10;.skool.com&#9;TRUE&#9;/&#9;TRUE&#9;...&#9;auth_token&#9;..."></textarea>
+
+            <div style="margin-top:12px">
+                <button id="importBtn">Import session</button>
+            </div>
+            <div id="importMessage" class="msg hidden"></div>
+        </div>
+    </section>
 </div>
 
-<div class="footer hidden" id="footer">
+<div class="footer" id="footer">
     <div class="footer-inner">
         <button id="download">Download selected</button>
         <span class="count" id="count">0 selected</span>
@@ -105,6 +175,17 @@ const $ = (id) => document.getElementById(id);
 let current = null;              // last loaded thread payload
 const selected = new Set();      // selected video indexes
 
+/* ---------- tabs ---------- */
+function showTab(name) {
+    document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
+    ['download', 'library', 'settings'].forEach((n) => $('tab-' + n).classList.toggle('hidden', n !== name));
+    $('footer').classList.toggle('hidden', name !== 'download');
+    if (name === 'library') loadLibrary();
+    if (name === 'settings') checkAuth();
+}
+document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => showTab(t.dataset.tab)));
+
+/* ---------- helpers ---------- */
 function relTime(iso) {
     if (!iso) return '';
     const d = new Date(iso), s = (Date.now() - d.getTime()) / 1000;
@@ -119,21 +200,41 @@ function fmtDur(ms) {
     const t = Math.round(ms / 1000);
     return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0');
 }
+function fmtSize(bytes) {
+    if (!bytes) return '';
+    const mb = bytes / 1048576;
+    return mb >= 1024 ? (mb / 1024).toFixed(2) + ' GB' : mb.toFixed(1) + ' MB';
+}
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+function fileUrl(p, dl) {
+    return '/api/file?path=' + encodeURIComponent(p) + (dl ? '&dl=1' : '');
+}
 
+/* ---------- auth ---------- */
+function describeAuth(r) {
+    if (r.status === 'valid') {
+        return { text: 'Skool session active' + (r.expiresAt ? ' · expires ' + new Date(r.expiresAt).toLocaleDateString() : ''), bad: false };
+    }
+    if (r.status === 'expired') return { text: 'Skool session expired — re-import in Settings', bad: true };
+    if (r.status === 'no-expiry') return { text: 'Skool session imported (no expiry info)', bad: false };
+    return { text: 'No Skool session — import cookies.txt in the Settings tab', bad: true };
+}
 async function checkAuth() {
     try {
         const r = await fetch('/api/auth').then((x) => x.json());
-        const el = $('auth');
-        if (r.status === 'valid') {
-            el.textContent = 'Skool session active' + (r.expiresAt ? ' · expires ' + new Date(r.expiresAt).toLocaleDateString() : '');
-            el.classList.remove('bad');
-        } else {
-            el.textContent = 'No valid Skool session — run `npm run login` first';
-            el.classList.add('bad');
+        const d = describeAuth(r);
+        for (const id of ['auth', 'settingsStatus']) {
+            const el = $(id);
+            if (!el) continue;
+            el.textContent = d.text;
+            el.classList.toggle('bad', d.bad);
         }
     } catch { /* ignore */ }
 }
 
+/* ---------- download tab ---------- */
 function showMessage(text, isError) {
     const m = $('message');
     m.textContent = text;
@@ -180,10 +281,6 @@ function renderNode(node, depth) {
     }
     for (const child of node.children) el.appendChild(renderNode(child, depth + 1));
     return el;
-}
-
-function escapeHtml(s) {
-    return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
 function refreshCount() {
@@ -270,12 +367,122 @@ function showDone(s) {
     for (const f of s.files || []) {
         const div = document.createElement('div');
         div.innerHTML = `
-            <video controls preload="metadata" src="/api/file?path=${encodeURIComponent(f)}"></video>
-            <a href="/api/file?path=${encodeURIComponent(f)}" download>${escapeHtml(f.split('/').pop())}</a>`;
+            <video controls preload="metadata" src="${fileUrl(f)}"></video>
+            <a href="${fileUrl(f, true)}" download>${escapeHtml(f.split('/').pop())}</a>`;
         list.appendChild(div);
     }
 }
 
+/* ---------- library tab ---------- */
+async function loadLibrary() {
+    const list = $('libList');
+    const msg = $('libMessage');
+    msg.className = 'msg hidden';
+    list.innerHTML = '<p class="group">Loading…</p>';
+    try {
+        const { items } = await fetch('/api/library').then((x) => x.json());
+        if (!items.length) {
+            list.innerHTML = '';
+            msg.textContent = 'No downloads yet.';
+            msg.className = 'msg';
+            return;
+        }
+        const groups = new Map();
+        for (const it of items) {
+            const key = it.dir || '(root)';
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(it);
+        }
+        list.innerHTML = '';
+        for (const [dir, files] of groups) {
+            const g = document.createElement('div');
+            g.className = 'lib-group';
+            g.innerHTML = `<h3>${escapeHtml(dir)}</h3>`;
+            for (const f of files) {
+                const item = document.createElement('div');
+                item.className = 'lib-item';
+                item.innerHTML = `
+                    <video controls preload="none" src="${fileUrl(f.path)}"></video>
+                    <div class="lib-row">
+                        <span class="lib-name">${escapeHtml(f.name)}</span>
+                        <span class="lib-size">${fmtSize(f.size)}</span>
+                        <a class="dl-link" href="${fileUrl(f.path, true)}" download>Download</a>
+                        <button class="danger" data-path="${escapeHtml(f.path)}">Delete</button>
+                    </div>`;
+                item.querySelector('.danger').addEventListener('click', (e) => confirmDelete(e.target));
+                g.appendChild(item);
+            }
+            list.appendChild(g);
+        }
+    } catch (err) {
+        list.innerHTML = '';
+        msg.textContent = 'Failed to load library: ' + String(err.message || err);
+        msg.className = 'msg err';
+    }
+}
+
+function confirmDelete(btn) {
+    if (btn.dataset.armed) {
+        deleteFile(btn.dataset.path);
+        return;
+    }
+    btn.dataset.armed = '1';
+    btn.textContent = 'Really delete?';
+    setTimeout(() => {
+        if (!btn.isConnected) return;
+        delete btn.dataset.armed;
+        btn.textContent = 'Delete';
+    }, 4000);
+}
+async function deleteFile(p) {
+    try {
+        const r = await fetch('/api/file?path=' + encodeURIComponent(p), { method: 'DELETE' });
+        if (!r.ok) throw new Error((await r.json()).error || 'Delete failed');
+        loadLibrary();
+    } catch (err) {
+        const msg = $('libMessage');
+        msg.textContent = String(err.message || err);
+        msg.className = 'msg err';
+    }
+}
+
+/* ---------- settings tab ---------- */
+function importResult(text, kind) {
+    const m = $('importMessage');
+    m.textContent = text;
+    m.className = 'msg ' + kind;
+}
+async function submitImport(raw) {
+    if (!raw.trim()) { importResult('Nothing to import — upload or paste a cookies.txt first.', 'err'); return; }
+    $('importBtn').disabled = true;
+    try {
+        const r = await fetch('/api/auth/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: raw
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'Import failed');
+        importResult('Session imported ✓', 'ok');
+        $('cookiePaste').value = '';
+        $('cookieFile').value = '';
+        checkAuth();
+    } catch (err) {
+        importResult(String(err.message || err), 'err');
+    } finally {
+        $('importBtn').disabled = false;
+    }
+}
+$('cookieFile').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (file) submitImport(await file.text());
+});
+$('importBtn').addEventListener('click', async () => {
+    const file = $('cookieFile').files[0];
+    submitImport(file ? await file.text() : $('cookiePaste').value);
+});
+
+/* ---------- wire up ---------- */
 $('load').addEventListener('click', loadThread);
 $('url').addEventListener('keydown', (e) => { if (e.key === 'Enter') loadThread(); });
 $('download').addEventListener('click', startDownload);
@@ -284,6 +491,7 @@ $('clear').addEventListener('click', () => {
     document.querySelectorAll('.vid input').forEach((c) => (c.checked = false));
     refreshCount();
 });
+$('libRefresh').addEventListener('click', loadLibrary);
 checkAuth();
 </script>
 </body>
