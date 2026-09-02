@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-deploy:
-    name: Build image + deploy op MX
+    name: Build image + deploy to MX
     runs-on: [self-hosted, linux, amd64]
     steps:
       - name: Checkout
@@ -16,9 +16,9 @@ jobs:
           git clone "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@git.strak.jp/${{ github.repository }}.git" .
           git checkout "${{ github.sha }}"
 
-      # De runner deelt de Docker-daemon van de host met de deploy-stap, dus het
-      # image blijft lokaal — geen registry-push (de Playwright-base is te groot
-      # voor de ingress) en geen registry-opslag op de Pi.
+      # The runner shares the host Docker daemon with the deploy step, so the
+      # image stays local — no registry push (the Playwright base is too large
+      # for the ingress) and no registry storage on the Pi.
       - name: Build image
         run: docker build --provenance=false -t git.strak.jp/homelab/skool-downloader:latest .
 
@@ -32,7 +32,7 @@ jobs:
           for i in $(seq 1 30); do
             STATUS=$(docker inspect --format='{{.State.Health.Status}}' skool-downloader 2>/dev/null || echo missing)
             [ "$STATUS" = "healthy" ] && echo "✓ Healthy" && exit 0
-            echo "Wachten... ($STATUS)"
+            echo "Waiting... ($STATUS)"
             sleep 5
           done
           echo "✗ Timeout" && docker logs skool-downloader --tail=30 && exit 1
