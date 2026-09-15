@@ -906,11 +906,30 @@ export class Scraper {
         await page.close();
 
         // --- 3. Best-guess selection ---
-        // Anchor = the comment the URL points at (`?p=`), otherwise the current
-        // user's own post/comments in this thread.
+        // Anchor = the comment the URL points at (`?p=`) — but only when that id
+        // actually resolves to a *comment*. Skool also stamps a plain post URL
+        // (no specific comment in view) with `?p=<postId prefix>`, and postId
+        // can coincidentally share its shortId with the `p=` value; treating the
+        // post itself as the anchor would make every reply anywhere in the whole
+        // thread count as "inside the anchor". So a `p=` match only counts if it
+        // lands on an actual comment node; otherwise fall back to the current
+        // user's own post/comments in this thread, same as no `p=` at all.
+        let preselectNode: ThreadNode | undefined;
+        if (preselectShortId) {
+            const findComment = (node: ThreadNode): ThreadNode | undefined => {
+                if (node.kind === 'comment' && node.shortId === preselectShortId) return node;
+                for (const child of node.children) {
+                    const found = findComment(child);
+                    if (found) return found;
+                }
+                return undefined;
+            };
+            preselectNode = findComment(threadTree);
+        }
+
         const anchors: ThreadNode[] = [];
         const collectAnchors = (node: ThreadNode) => {
-            if (preselectShortId ? node.shortId === preselectShortId : node.isCurrentUser) {
+            if (preselectNode ? node === preselectNode : node.isCurrentUser) {
                 anchors.push(node);
             }
             node.children.forEach(collectAnchors);
@@ -934,11 +953,9 @@ export class Scraper {
         let suggestedVideoIndexes: number[] = [];
         if (ownerFeedback.length > 0) {
             suggestedVideoIndexes = [...new Set(ownerFeedback)];
-        } else if (preselectShortId) {
+        } else if (preselectNode && !preselectNode.isCurrentUser) {
             // The URL points straight at someone else's video comment.
-            suggestedVideoIndexes = anchors
-                .filter((n) => !n.isCurrentUser)
-                .flatMap((n) => n.videoIndexes);
+            suggestedVideoIndexes = preselectNode.videoIndexes;
         }
 
         return {
