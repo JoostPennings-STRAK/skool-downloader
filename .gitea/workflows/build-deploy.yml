@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-deploy:
-    name: Build image + deploy to MX
+    name: Build image + deploy on galaxy-ci
     runs-on: [self-hosted, linux, amd64]
     steps:
       - name: Checkout
@@ -16,23 +16,33 @@ jobs:
           git clone "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@git.strak.jp/${{ github.repository }}.git" .
           git checkout "${{ github.sha }}"
 
-      # The runner shares the host Docker daemon with the deploy step, so the
-      # image stays local — no registry push (the Playwright base is too large
-      # for the ingress) and no registry storage on the Pi.
+      # The runner shares the Docker daemon of galaxy-ci with the Komodo Stack "skool-downloader"
+      # (Homelab/galaxy-ci-stacks, pull_policy: never), so the image stays local: no registry push.
       - name: Build image
         run: docker build --provenance=false -t git.strak.jp/homelab/skool-downloader:latest .
 
-      - name: Deploy
+      # The runner only has busybox (no curl/openssl), so use Komodo's GitLab-style listener:
+      # the secret goes in X-Gitlab-Token, over HTTPS. KOMODO_WEBHOOK_SECRET is Komodo's global webhook secret (Homelab org secret).
+      # The ref must match the Stack's branch (main of galaxy-ci-stacks), not this repo's ref.
+      - name: Trigger Komodo deploy
+        env:
+          KOMODO_WEBHOOK_SECRET: ${{ secrets.KOMODO_WEBHOOK_SECRET }}
         run: |
-          cd /opt/stacks/skool-downloader
-          docker compose up -d --force-recreate --remove-orphans
+          wget -q -O- \
+            --header "Content-Type: application/json" \
+            --header "X-Gitlab-Token: $KOMODO_WEBHOOK_SECRET" \
+            --post-data '{"ref":"refs/heads/main"}' \
+            https://komodo.jpmm.nl/listener/gitlab/stack/skool-downloader/deploy
 
+      # The webhook returns before the deploy is done: wait until the container runs the new image and is healthy
       - name: Health check
         run: |
-          for i in $(seq 1 30); do
+          NEW=$(docker image inspect --format='{{.Id}}' git.strak.jp/homelab/skool-downloader:latest)
+          for i in $(seq 1 36); do
+            IMAGE=$(docker inspect --format='{{.Image}}' skool-downloader 2>/dev/null || echo missing)
             STATUS=$(docker inspect --format='{{.State.Health.Status}}' skool-downloader 2>/dev/null || echo missing)
-            [ "$STATUS" = "healthy" ] && echo "✓ Healthy" && exit 0
-            echo "Waiting... ($STATUS)"
+            [ "$IMAGE" = "$NEW" ] && [ "$STATUS" = "healthy" ] && echo "✓ Healthy" && exit 0
+            echo "Waiting... ($STATUS$([ "$IMAGE" = "$NEW" ] || echo ', old image'))"
             sleep 5
           done
           echo "✗ Timeout" && docker logs skool-downloader --tail=30 && exit 1
